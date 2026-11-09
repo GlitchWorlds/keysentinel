@@ -1,6 +1,11 @@
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 // Windows Drive Types
 pub const DRIVE_REMOVABLE: u32 = 2;
 
@@ -90,7 +95,7 @@ impl UsbMonitor {
         #[cfg(windows)]
         unsafe {
             use windows_sys::Win32::Storage::FileSystem::{
-                GetDriveTypeW, GetVolumeInformationW,
+                GetDiskFreeSpaceExW, GetDriveTypeW, GetVolumeInformationW,
             };
 
             // Check drive letters D to Z
@@ -129,14 +134,24 @@ impl UsbMonitor {
                         file_system = String::from_utf16_lossy(&fs_name[..len_fs]);
                     }
 
+                    let mut free_bytes = 0u64;
+                    let mut total_bytes = 0u64;
+                    let mut total_free = 0u64;
+                    GetDiskFreeSpaceExW(
+                        wide_drive.as_ptr(),
+                        &mut free_bytes,
+                        &mut total_bytes,
+                        &mut total_free,
+                    );
+
                     let findings = Self::inspect_drive(&format!("{}:\\", letter as char));
 
                     list.push(UsbDriveInfo {
                         letter: letter_str,
                         volume_name: if volume_label.is_empty() { "USB Drive".to_string() } else { volume_label },
                         file_system: if file_system.is_empty() { "FAT32/NTFS".to_string() } else { file_system },
-                        total_space_mb: 0,
-                        free_space_mb: 0,
+                        total_space_mb: total_bytes / (1024 * 1024),
+                        free_space_mb: free_bytes / (1024 * 1024),
                         suspicious_findings: findings,
                     });
                 }
@@ -153,6 +168,7 @@ impl UsbMonitor {
         {
             use std::process::Command;
             let output = Command::new("reg")
+                .creation_flags(CREATE_NO_WINDOW)
                 .args(["query", r"HKLM\SYSTEM\CurrentControlSet\Services\USBSTOR", "/v", "Start"])
                 .output();
 
@@ -171,6 +187,7 @@ impl UsbMonitor {
             use std::process::Command;
             let val = if block { "4" } else { "3" };
             let output = Command::new("reg")
+                .creation_flags(CREATE_NO_WINDOW)
                 .args([
                     "add",
                     r"HKLM\SYSTEM\CurrentControlSet\Services\USBSTOR",

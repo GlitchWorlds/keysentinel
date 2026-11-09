@@ -1,15 +1,16 @@
 [package]
 name = "keysentinel"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 authors = ["GlitchWorlds <bobby@bobbyray.my.id>"]
-description = "Anti-Keylogger, BadUSB & Physical USB Endpoint Defense Suite for Windows"
+description = "Active Keystroke Firewall, Anti-Keylogger, BadUSB & Physical USB Endpoint Defense Suite for Windows"
 
 [dependencies]
 eframe = { version = "0.30.0", default-features = false, features = ["default_fonts", "glow"] }
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Threading",
     "Win32_System_ProcessStatus",

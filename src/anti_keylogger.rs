@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::badusb::{BadUsbDetector, BadUsbVerdict, UsbAttackEvent};
+use crate::badusb::{BadUsbDetector, BadUsbVerdict, EventSeverity, InputSource, UsbAttackEvent};
 
 #[cfg(windows)]
 extern "system" {
@@ -38,30 +38,49 @@ impl KeyloggerDetector {
         self.auto_lock_on_badusb = enabled;
     }
 
+    #[allow(dead_code)]
     pub fn is_auto_lock_enabled(&self) -> bool {
         self.auto_lock_on_badusb
     }
 
-    /// Process a captured keystroke event
-    pub fn on_keystroke(&mut self) -> BadUsbVerdict {
+    /// Process a captured keystroke event with full hardware/software telemetry
+    pub fn on_key_event(&mut self, vk_code: u32, flags: u32, is_keydown: bool) -> BadUsbVerdict {
         let now = Instant::now();
-        let verdict = self.badusb_detector.record_keystroke(now);
+        let (verdict, _is_repeat) = self.badusb_detector.on_key_event(vk_code, flags, is_keydown, now);
 
-        if let BadUsbVerdict::AutomatedInjectionDetected { cpm } = verdict {
+        if let BadUsbVerdict::AutomatedInjectionDetected { .. } = verdict {
             let should_lock = self.auto_lock_on_badusb
-                && self.last_injection_alert.map(|t| t.elapsed().as_secs() > 10).unwrap_or(true);
+                && self.last_injection_alert.map(|t| t.elapsed().as_secs() > 8).unwrap_or(true);
 
             if should_lock {
                 self.last_injection_alert = Some(now);
                 self.lock_workstation();
             }
-            return BadUsbVerdict::AutomatedInjectionDetected { cpm };
         }
 
         verdict
     }
 
-    /// Emergency lock workstation to foil Rubber Ducky / BadUSB payload in 1 second
+    /// Convenience wrapper for legacy single-stroke simulation
+    #[allow(dead_code)]
+    pub fn on_keystroke(&mut self) -> BadUsbVerdict {
+        self.on_key_event(0x41 /* 'A' */, 0, true)
+    }
+
+    pub fn live_telemetry(&self) -> (u32, InputSource, f64) {
+        (
+            self.badusb_detector.live_cpm,
+            self.badusb_detector.live_source,
+            self.badusb_detector.live_jitter_ms,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn reset_window(&mut self) {
+        self.badusb_detector.reset_window();
+    }
+
+    /// Emergency lock workstation to foil Rubber Ducky / BadUSB payload in milliseconds
     pub fn lock_workstation(&self) {
         #[cfg(windows)]
         unsafe {
@@ -130,7 +149,6 @@ impl KeyloggerDetector {
                     reasons.push("Dijalankan langsung dari folder Downloads".to_string());
                 }
             } else {
-                // Process without accessible path but running in user session
                 score += 15;
                 reasons.push("Path executable tersembunyi atau akses terbatas".to_string());
             }
@@ -147,6 +165,28 @@ impl KeyloggerDetector {
         }
 
         suspicious.sort_by(|a, b| b.suspicious_score.cmp(&a.suspicious_score));
+
+        // If high-threat keyloggers found, log an event
+        if let Some(highest) = suspicious.first() {
+            if highest.suspicious_score >= 60 {
+                if let Ok(mut evts) = self.events.lock() {
+                    let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                    let title = "🕵️ Potensi Keylogger Terdeteksi";
+                    if evts.first().map(|e| e.title != title).unwrap_or(true) {
+                        evts.insert(0, UsbAttackEvent {
+                            timestamp: ts,
+                            title: title.to_string(),
+                            description: format!("Proses '{}' (PID: {}) dicurigai: {}", highest.process_name, highest.process_id, highest.description),
+                            severity: EventSeverity::Warning,
+                        });
+                        if evts.len() > 100 {
+                            evts.truncate(100);
+                        }
+                    }
+                }
+            }
+        }
+
         suspicious
     }
 }
